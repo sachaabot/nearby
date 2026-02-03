@@ -11,6 +11,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [searchRadius, setSearchRadius] = useState(1000); // Start with 1km
   const [selectedPOI, setSelectedPOI] = useState(null);
+  const mapRef = React.useRef(null);
 
   // Get user's geolocation on mount
   useEffect(() => {
@@ -39,77 +40,77 @@ function App() {
     setLoading(true);
     try {
       const [lat, lon] = coords;
-      
-      // Categories to search with increased timeout tolerance
-      const categories = [
-        { tag: 'amenity', value: 'restaurant', label: 'Restaurant' },
-        { tag: 'amenity', value: 'pharmacy', label: 'Pharmacy' },
-        { tag: 'shop', value: 'supermarket', label: 'Supermarket' },
-        { tag: 'amenity', value: 'cafe', label: 'Cafe' },
-        { tag: 'amenity', value: 'bar', label: 'Bar' },
-        { tag: 'tourism', value: 'attraction', label: 'Attraction' },
-        { tag: 'amenity', value: 'hospital', label: 'Hospital' },
-        { tag: 'amenity', value: 'parking', label: 'Parking' },
-      ];
-
-      const allPOIs = [];
       const radiusKm = radius / 1000;
       const radiusDegrees = radiusKm / 111; // rough conversion
 
-      for (const cat of categories) {
-        try {
-          // Build query for each category with timeout
-          const query = `
-            [out:json][timeout:10];
-            (
-              node["${cat.tag}"="${cat.value}"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
-              way["${cat.tag}"="${cat.value}"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
-            );
-            out center;
-          `;
+      // Build single combined query to avoid rate limiting
+      const query = `
+        [out:json][timeout:25];
+        (
+          node["amenity"="restaurant"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="restaurant"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["amenity"="pharmacy"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="pharmacy"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["shop"="supermarket"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["shop"="supermarket"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["amenity"="cafe"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="cafe"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["amenity"="bar"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="bar"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["tourism"="attraction"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["tourism"="attraction"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["amenity"="hospital"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="hospital"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          node["amenity"="parking"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+          way["amenity"="parking"](${lat - radiusDegrees},${lon - radiusDegrees},${lat + radiusDegrees},${lon + radiusDegrees});
+        );
+        out center;
+      `;
 
-          const response = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST',
-            body: query,
-            signal: AbortSignal.timeout(15000),
-          });
+      const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: query,
+        signal: AbortSignal.timeout(30000),
+      });
 
-          if (response.ok) {
-            const data = await response.json();
-            const categoryPOIs = (data.elements || [])
-              .filter(el => el.lat && el.lon && el.tags && el.tags.name)
-              .map(el => ({
-                id: el.id,
-                name: el.tags.name,
-                lat: el.lat,
-                lon: el.lon,
-                type: cat.label,
-                distance: calculateDistance([lat, lon], [el.lat, el.lon]),
-              }));
-            allPOIs.push(...categoryPOIs);
-          }
-        } catch (err) {
-          console.warn(`Category ${cat.value} fetch failed:`, err);
-          // Continue with next category
-        }
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
       }
 
-      // Deduplicate by name and location, sort by distance
-      const uniquePOIs = Array.from(
-        new Map(
-          allPOIs.map(poi => [
-            `${Math.round(poi.lat * 10000)},${Math.round(poi.lon * 10000)}`,
-            poi
-          ])
-        ).values()
-      ).sort((a, b) => a.distance - b.distance);
+      const data = await response.json();
+      
+      const typeMap = {
+        restaurant: 'Restaurant',
+        pharmacy: 'Pharmacy',
+        supermarket: 'Supermarket',
+        cafe: 'Cafe',
+        bar: 'Bar',
+        attraction: 'Attraction',
+        hospital: 'Hospital',
+        parking: 'Parking',
+      };
 
-      setPois(uniquePOIs);
+      const poiList = (data.elements || [])
+        .filter(el => el.lat && el.lon && el.tags && el.tags.name)
+        .map(el => {
+          const typeValue = el.tags.amenity || el.tags.shop || el.tags.tourism || 'other';
+          return {
+            id: el.id,
+            name: el.tags.name,
+            lat: el.lat,
+            lon: el.lon,
+            type: typeMap[typeValue] || typeValue,
+            distance: calculateDistance([lat, lon], [el.lat, el.lon]),
+          };
+        })
+        .sort((a, b) => a.distance - b.distance);
+
+      setPois(poiList);
       
       // If few results and radius is still small, expand search
-      if (uniquePOIs.length < 5 && radius < 5000) {
+      if (poiList.length < 5 && radius < 5000) {
         setSearchRadius(radius * 1.5);
-        setTimeout(() => fetchNearbyPOIs(coords, radius * 1.5), 1000);
+        setTimeout(() => fetchNearbyPOIs(coords, radius * 1.5), 2000);
       }
     } catch (error) {
       console.error('Error fetching POIs:', error);
@@ -154,12 +155,13 @@ function App() {
         <p>Discover points of interest around you</p>
       </header>
 
-      <SearchBar onSearch={handleSearch} />
+      <SearchBar onSearch={handleSearch} mapRef={mapRef} />
 
       <div className="container">
         <div className="map-section">
           {mapCenter && (
             <MapContainer
+              ref={mapRef}
               center={mapCenter}
               pois={pois}
               radius={searchRadius}

@@ -23,8 +23,10 @@ const POI_COLORS = {
   other: '#667eea',
 };
 
-function MapContainer({ center, pois, radius, onMapClick, selectedPOI }) {
+const MapContainer = React.forwardRef(({ center, pois, radius, onMapClick, selectedPOI }, ref) => {
   const mapRef = React.useRef();
+
+  React.useImperativeHandle(ref, () => mapRef.current);
 
   const handleMapClick = (e) => {
     const { lat, lng } = e.latlng;
@@ -96,6 +98,7 @@ function MapContainer({ center, pois, radius, onMapClick, selectedPOI }) {
       </LeafletMap>
     </div>
   );
-}
+});
 
+MapContainer.displayName = 'MapContainer';
 export default MapContainer;
